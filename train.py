@@ -1,7 +1,7 @@
 """
 Retrain the YOLO model for your own dataset.
 """
-
+import os
 import numpy as np
 import keras.backend as K
 from keras.layers import Input, Lambda
@@ -11,6 +11,7 @@ from keras.callbacks import TensorBoard, ModelCheckpoint, ReduceLROnPlateau, Ear
 
 from yolo3.model import preprocess_true_boxes, yolo_body, tiny_yolo_body, yolo_loss
 from yolo3.utils import get_random_data
+from keras.utils.vis_utils import plot_model
 
 
 def _main():
@@ -32,20 +33,22 @@ def _main():
         model = create_model(input_shape, anchors, num_classes,
             freeze_body=2, weights_path='model_data/yolo_weights.h5') # make sure you know what you freeze
 
+    # plot_model(model, to_file='model.png') #自己加的，网络可视化
+
     logging = TensorBoard(log_dir=log_dir)
     checkpoint = ModelCheckpoint(log_dir + 'ep{epoch:03d}-loss{loss:.3f}-val_loss{val_loss:.3f}.h5',
         monitor='val_loss', save_weights_only=True, save_best_only=True, period=3)
     reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=3, verbose=1)
     early_stopping = EarlyStopping(monitor='val_loss', min_delta=0, patience=10, verbose=1)
 
-    val_split = 0.1
+    val_split = 0.1 # 验证集比例
     with open(annotation_path) as f:
         lines = f.readlines()
     np.random.seed(10101)
     np.random.shuffle(lines)
     np.random.seed(None)
-    num_val = int(len(lines)*val_split)
-    num_train = len(lines) - num_val
+    num_val = int(len(lines)*val_split) # 验证集数量
+    num_train = len(lines) - num_val # 训练集数量
 
     # Train with frozen layers first, to get a stable loss.
     # Adjust num epochs to your dataset. This step is enough to obtain a not bad model.
@@ -54,8 +57,14 @@ def _main():
             # use custom yolo_loss Lambda layer.
             'yolo_loss': lambda y_true, y_pred: y_pred})
 
-        batch_size = 32
+        batch_size = 32 # batch
+        # batch_size = 1
         print('Train on {} samples, val on {} samples, with batch size {}.'.format(num_train, num_val, batch_size))
+
+        # a=data_generator_wrapper(lines[:num_train], batch_size, input_shape, anchors, num_classes)
+        # print(a)
+
+
         model.fit_generator(data_generator_wrapper(lines[:num_train], batch_size, input_shape, anchors, num_classes),
                 steps_per_epoch=max(1, num_train//batch_size),
                 validation_data=data_generator_wrapper(lines[num_train:], batch_size, input_shape, anchors, num_classes),
@@ -111,24 +120,28 @@ def create_model(input_shape, anchors, num_classes, load_pretrained=True, freeze
     num_anchors = len(anchors)
 
     y_true = [Input(shape=(h//{0:32, 1:16, 2:8}[l], w//{0:32, 1:16, 2:8}[l], \
-        num_anchors//3, num_classes+5)) for l in range(3)]
+        num_anchors//3, num_classes+5)) for l in range(3)] # 算术运算符//取整除 - 向下取接近除数的整数
 
     model_body = yolo_body(image_input, num_anchors//3, num_classes)
     print('Create YOLOv3 model with {} anchors and {} classes.'.format(num_anchors, num_classes))
 
-    if load_pretrained:
+    if load_pretrained: # 加载预训练模型
         model_body.load_weights(weights_path, by_name=True, skip_mismatch=True)
         print('Load weights {}.'.format(weights_path))
         if freeze_body in [1, 2]:
             # Freeze darknet53 body or freeze all but 3 output layers.
             num = (185, len(model_body.layers)-3)[freeze_body-1]
-            for i in range(num): model_body.layers[i].trainable = False
+            for i in range(num): model_body.layers[i].trainable = False # 将其他层的训练关闭
             print('Freeze the first {} layers of total {} layers.'.format(num, len(model_body.layers)))
 
     model_loss = Lambda(yolo_loss, output_shape=(1,), name='yolo_loss',
         arguments={'anchors': anchors, 'num_classes': num_classes, 'ignore_thresh': 0.5})(
         [*model_body.output, *y_true])
     model = Model([model_body.input, *y_true], model_loss)
+    plot_model(model, to_file=os.path.join('model_data', 'model.png'), show_shapes=True,
+               show_layer_names=True)  # 存储网络结构
+    model.summary()  # 打印网络
+    model.save('model_data/my_model.h5')
 
     return model
 
@@ -177,8 +190,12 @@ def data_generator(annotation_lines, batch_size, input_shape, anchors, num_class
             box_data.append(box)
             i = (i+1) % n
         image_data = np.array(image_data)
-        box_data = np.array(box_data)
+        box_data = np.array(box_data) # 每个图片最多含有20个框
         y_true = preprocess_true_boxes(box_data, input_shape, anchors, num_classes)
+        # y_true: list of array, shape like yolo_outputs, xywh are reletive value
+        # 返回y_true。计算真实框的长宽，归一化，计算经神经网络后的grid大小，分别缩小了32,16,8，并各对应三个anchor，构建y_true的形状，根据#宽设计一个mask，筛选出最合适的钱20个预测anchor，并将数据填入到y_true中。
+        # np.expand_dims：xpand_dims(a, axis)就是在axis的那一个轴上把数据加上去，这个数据在axis这个轴的0位置
+        # yield：yield就是 return 返回一个值，并且记住这个返回的位置，下次迭代就从这个位置后(下一行)开始。带有yield的函数不仅仅只用于for循环中，而且可用于某个函数的参数，只要这个函数的参数允许迭代参数。
         yield [image_data, *y_true], np.zeros(batch_size)
 
 def data_generator_wrapper(annotation_lines, batch_size, input_shape, anchors, num_classes):

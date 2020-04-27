@@ -35,11 +35,14 @@ def rand(a=0, b=1):
 
 def get_random_data(annotation_line, input_shape, random=True, max_boxes=20, jitter=.3, hue=.1, sat=1.5, val=1.5, proc_img=True):
     '''random preprocessing for real-time data augmentation'''
-    line = annotation_line.split()
-    image = Image.open(line[0])
-    iw, ih = image.size
-    h, w = input_shape
-    box = np.array([np.array(list(map(int,box.split(',')))) for box in line[1:]])
+    # 不随机，将图片处理到需求大小，并调整框的位置，空缺处用均匀色填充；
+    # 随机，对图片进行随机变换、翻转，将图片处理到需求大小，并调整框的位置，空缺处用均匀色填充；
+    line = annotation_line.split()  # 将annotation_line按空格分割为line列表；
+    image = Image.open(line[0])  # 使用PIL读取图片image；
+    iw, ih = image.size  # 图片的宽和高；
+    h, w = input_shape  # 输入尺寸的高和宽
+    box = np.array([np.array(list(map(int, box.split(',')))) for box in line[1:]])
+    # 图片中的标注框box，box是5维，4个点和1个类别；
 
     if not random:
         # resize image
@@ -59,7 +62,7 @@ def get_random_data(annotation_line, input_shape, random=True, max_boxes=20, jit
         box_data = np.zeros((max_boxes,5))
         if len(box)>0:
             np.random.shuffle(box)
-            if len(box)>max_boxes: box = box[:max_boxes]
+            if len(box)>max_boxes: box = box[:max_boxes] # 最多只取20个
             box[:, [0,2]] = box[:, [0,2]]*scale + dx
             box[:, [1,3]] = box[:, [1,3]]*scale + dy
             box_data[:len(box)] = box
@@ -67,7 +70,7 @@ def get_random_data(annotation_line, input_shape, random=True, max_boxes=20, jit
         return image_data, box_data
 
     # resize image
-    new_ar = w/h * rand(1-jitter,1+jitter)/rand(1-jitter,1+jitter)
+    new_ar = w/h * rand(1-jitter,1+jitter)/rand(1-jitter,1+jitter) #长宽比（aspect ratio）
     scale = rand(.25, 2)
     if new_ar < 1:
         nh = int(scale*h)
@@ -86,7 +89,7 @@ def get_random_data(annotation_line, input_shape, random=True, max_boxes=20, jit
 
     # flip image or not
     flip = rand()<.5
-    if flip: image = image.transpose(Image.FLIP_LEFT_RIGHT)
+    if flip: image = image.transpose(Image.FLIP_LEFT_RIGHT) #根据随机数flip，随机左右翻转FLIP_LEFT_RIGHT图片
 
     # distort image
     hue = rand(-hue, hue)
@@ -115,6 +118,7 @@ def get_random_data(annotation_line, input_shape, random=True, max_boxes=20, jit
         box_w = box[:, 2] - box[:, 0]
         box_h = box[:, 3] - box[:, 1]
         box = box[np.logical_and(box_w>1, box_h>1)] # discard invalid box
+
         if len(box)>max_boxes: box = box[:max_boxes]
         box_data[:len(box)] = box
 
